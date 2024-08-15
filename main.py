@@ -194,7 +194,7 @@ class Sync:
                 if p["name"] == name:
                     serverObj.clearPlaylist(p["id"])
                     for i in items:
-                        serverObj.createPlaylistItem(p["id"], i)
+                        serverObj.addPlaylistItem(p["id"], i)
         playlists = self.state["playlists"]
         for idx, p in enumerate(playlists):
             if p["name"] == name:
@@ -284,17 +284,13 @@ class Sync:
                 servers.append(serverObj.url)
                 self.state["servers"] = servers
 
-        try:
-            with open('state.json', 'w+') as f:
-                json.dump(self.state, f)
-                f.close()
-        except:
-            raise ValueError("Could not write config.json")
+        if not dryRun:
+            try:
+                with open('state.json', 'w+') as f:
+                    json.dump(self.state, f)
+                    f.close()
+            except:
+                raise ValueError("Could not write config.json")
 
 Sync().sync()
 
-#TODO
-# Add a transaction system
-# Don't push changes if multiple instances have changes on the same thing
-# Add a way to push our saved state to a server
-#  Add a option to remove all things before, or just add the state
