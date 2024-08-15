@@ -145,12 +145,17 @@ class Sync:
         try:
             with open('state.json') as f:
                 self.state = json.load(f)
+                self.state.setdefault("subscriptions", [])
+                self.state.setdefault("servers", [])
+                self.state.setdefault("playlists", [])
+                self.state.setdefault("todo", [])
                 f.close()
         except:
             self.state = {
                 "subscriptions": [],
                 "servers": [],
                 "playlists": [],
+                "todo": [],
             }
         try:
             with open('config.json') as f:
@@ -164,61 +169,63 @@ class Sync:
             serverObj.login(server["username"], server["password"])
             self.servers.append(serverObj)
 
+
+    def addTodo(self, type, additionalKey, additionalValue, serverFilter):
+        servers = [i for i, s in enumerate(self.servers) if s not in serverFilter]
+        found = False
+        for index, value in enumerate(self.state["todo"]):
+            if value['type'] == type and value[additionalKey] == additionalValue:
+                value['servers'] = list(set(value['servers'] + servers))
+                found = True
+                break
+        if not found:
+            self.state["todo"].append({ 'type': type, additionalKey: additionalValue, 'servers': servers })
+
     def subscribe(self, serverFilter, channel_id):
-        for serverObj in self.servers:
-            if serverObj in serverFilter:
-                continue
-            serverObj.subscribe(channel_id)
         subscriptions = self.state["subscriptions"]
         subscriptions.append(channel_id)
         self.state["subscriptions"] = subscriptions
+        self.addTodo("subscribe", "channel", channel_id, serverFilter)
 
     def unsubscribe(self, serverFilter, channel_id):
-        for serverObj in self.servers:
-            if serverObj in serverFilter:
-                continue
-            serverObj.unsubscribe(channel_id)
         subscriptions = self.state["subscriptions"]
         subscriptions.remove(channel_id)
         self.state["subscriptions"] = subscriptions
+        self.addTodo("unsubscribe", "channel", channel_id, serverFilter)
 
     def deletePlaylist(self, serverFilter, name):
-        for serverObj in self.servers:
-            if serverObj in serverFilter:
-                continue
-            playlists = serverObj.getPlaylists()
-            for p in playlists:
-                if p["name"] == name:
-                    serverObj.deletePlaylist(p["id"])
-        playlists = self.state["playlists"]
-        playlists.remove
-        self.state["playlists"] = playlists
+        self.state["playlists"] = [p for p in self.state["playlists"] if not p["name"] == name]
+        self.addTodo("deletePlaylist", "name", name, serverFilter)
 
     def createPlaylist(self, serverFilter, name, items):
-        for serverObj in self.servers:
-            if serverObj in serverFilter:
-                continue
-            response = serverObj.createPlaylist(name)
-            playlist_id = response['playlistId']
-            serverObj.addPlaylistItems(playlist_id, items)
         playlists = self.state["playlists"]
         playlists.append({'name': name, 'items': items})
         self.state["playlists"] = playlists
+        self.addTodo("createPlaylist", "name", name, serverFilter)
 
-    def updatePlaylist(self, serverFilter, name, items):
-        for serverObj in self.servers:
-            if serverObj in serverFilter:
-                continue
-            playlists = serverObj.getPlaylists()
-            for p in playlists:
-                if p["name"] == name:
-                    serverObj.clearPlaylist(p["id"])
-                    serverObj.addPlaylistItems(playlist_id, items)
+    def addPlaylistItem(self, serverFilter, name, item, index):
+        servers = [s.url for i, s in enumerate(self.servers) if s not in serverFilter]
+        print("TODO: Add Playlist Item {0} at {1} to Playlist {2} on servers {3}".format(item, index, name, servers))
         playlists = self.state["playlists"]
         for idx, p in enumerate(playlists):
             if p["name"] == name:
-                playlists[idx] = {'name': name, 'items': items}
+                new_list = p["items"]
+                new_list.insert(index, item)
+                playlists[idx] = {'name': name, 'items': new_list}
         self.state["playlists"] = playlists
+        self.addTodo("updatePlaylist", "name", name, serverFilter)
+
+    def removePlaylistItem(self, serverFilter, name, item, index):
+        servers = [s.url for i, s in enumerate(self.servers) if s not in serverFilter]
+        print("TODO: Remove Playlist Item {0} at {1} to Playlist {2} on servers {3}".format(item, index, name, servers))
+        playlists = self.state["playlists"]
+        for idx, p in enumerate(playlists):
+            if p["name"] == name:
+                new_list = p["items"]
+                new_list.remove(item)
+                playlists[idx] = {'name': name, 'items': new_list}
+        self.state["playlists"] = playlists
+        self.addTodo("updatePlaylist", "name", name, serverFilter)
 
     def pushCurrentState(self, serverObj):
         print("Pushing current State to {0}".format(serverObj.url))
@@ -247,12 +254,13 @@ class Sync:
                 if not item in new_list:
                     removeItemAction(idx, item)
 
-    def detectItemChange(self, original_list, new_list, itemsChangedAction):
-        if len(original_list) != len(new_list):
-            itemsChangedAction()
+    def detectItemChange(self, original_list, new_list, addItemAction, removeItemAction):
+        for idx, item in enumerate(new_list):
+            if new_list[idx] not in original_list:
+                addItemAction(idx, item)
         for idx, item in enumerate(original_list):
-            if original_list[idx] != new_list[idx]:
-                itemsChangedAction()
+            if original_list[idx] not in new_list:
+                removeItemAction(idx, item)
 
     def sync(self):
         for serverObj in self.servers:
@@ -281,8 +289,6 @@ class Sync:
                 lambda idx, item : self.createPlaylist([serverObj], item["name"], serverObj.getPlaylistItems(item["id"]))
             )
 
-
-            #TODO Once playlist editing is fully implemented in Piped we can be smarter here as well
             for p in playlists:
                 name = p["name"]
                 playlist_id = p["id"]
@@ -292,13 +298,42 @@ class Sync:
 
                 print("Checking playlist {0} for new/removed items on server {1}".format(name, serverObj.url))
                 self.detectItemChange(saved_content, new_content,
-                    lambda : self.updatePlaylist([serverObj], name, new_content)
+                    lambda idx, item: self.addPlaylistItem([serverObj], name, item, idx),
+                    lambda idx, item: self.removePlaylistItem([serverObj], name, item, idx)
                 )
 
             if not serverObj.url in self.state["servers"]:
                 servers = self.state["servers"]
                 servers.append(serverObj.url)
                 self.state["servers"] = servers
+
+        for action in self.state["todo"]:
+            for server in action["servers"]:
+                serverObj = self.servers[server]
+                if action["type"] == "subscribe":
+                    serverObj.subscribe(action["channel"])
+                elif action["type"] == "unsubscribe":
+                    serverObj.unsubscribe(action["channel"])
+                elif action["type"] == "deletePlaylist":
+                    playlists = serverObj.getPlaylists()
+                    for sp in playlists:
+                        if sp["name"] == action["name"]:
+                            serverObj.deletePlaylist(sp["id"])
+                elif action["type"] == "createPlaylist":
+                    for idx, p in enumerate(self.state["playlists"]):
+                        if p["name"] == action["name"]:
+                            response = serverObj.createPlaylist(action["name"])
+                            playlist_id = response['playlistId']
+                            if len(p["items"]) != 0:
+                                serverObj.addPlaylistItems(playlist_id, p["items"])
+                elif action["type"] == "updatePlaylist":
+                    for idx, p in enumerate(self.state["playlists"]):
+                        if p["name"] == action["name"]:
+                            playlists = serverObj.getPlaylists()
+                            for sp in playlists:
+                                if sp["name"] == action["name"]:
+                                    serverObj.clearPlaylist(sp["id"])
+                                    serverObj.addPlaylistItems(sp["id"], p["items"])
 
         if not dryRun:
             try:
