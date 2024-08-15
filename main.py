@@ -21,6 +21,7 @@ class Server:
         return self.server
 
     def login(self, username, password):
+        print("Login on server {0}".format(self.server))
         credentials = {"username": username, "password": password}
         self.session = Session()
         resp = self.session.post(self.server + "/login", json = credentials)
@@ -64,7 +65,7 @@ class Server:
     def createPlaylist(self, name):
         print("Create new playlist {0} on server {1}".format(name, self.server))
         if dryRun:
-            return;
+            return { "playlistId" : "test_id" };
         playlist = {"name" : name}
         resp = self.session.post(self.server + "/user/playlists/create", json = playlist, headers = self.auth_header)
         if not resp.ok:
@@ -111,6 +112,17 @@ class Server:
         if dryRun:
             return;
         item = {"videoId" : videoId, "playlistId" : playlist_id}
+        resp = self.session.post(self.server + "/user/playlists/add", json = item, headers = self.auth_header)
+        if not resp.ok:
+            resp.raise_for_status()
+        return resp.json()
+
+    def addPlaylistItems(self, playlist_id, videoIds):
+        print("Add the following items to playlist {0} on server {1}".format(playlist_id, self.server))
+        print(videoIds)
+        if dryRun:
+            return;
+        item = {"videoIds" : videoIds, "playlistId" : playlist_id}
         resp = self.session.post(self.server + "/user/playlists/add", json = item, headers = self.auth_header)
         if not resp.ok:
             resp.raise_for_status()
@@ -188,8 +200,7 @@ class Sync:
                 continue
             response = serverObj.createPlaylist(name)
             playlist_id = response['playlistId']
-            for i in items:
-                serverObj.addPlaylistItem(playlist_id, i);
+            serverObj.addPlaylistItems(playlist_id, items)
         playlists = self.state["playlists"]
         playlists.append({'name': name, 'items': items})
         self.state["playlists"] = playlists
@@ -202,8 +213,7 @@ class Sync:
             for p in playlists:
                 if p["name"] == name:
                     serverObj.clearPlaylist(p["id"])
-                    for i in items:
-                        serverObj.addPlaylistItem(p["id"], i)
+                    serverObj.addPlaylistItems(playlist_id, items)
         playlists = self.state["playlists"]
         for idx, p in enumerate(playlists):
             if p["name"] == name:
@@ -217,8 +227,7 @@ class Sync:
         for p in self.state["playlists"]:
             response = serverObj.createPlaylist(p["name"]);
             playlist_id = response['playlistId']
-            for i in p["items"]:
-                serverObj.addPlaylistItem(playlist_id, i);
+            serverObj.addPlaylistItems(playlist_id, p["items"])
 
     def detectNewItems(self, original_list, new_list, key, addItemAction):
         for idx, item in enumerate(new_list):
