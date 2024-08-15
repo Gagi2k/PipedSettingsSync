@@ -43,6 +43,7 @@ class Server:
         resp = self.session.post(self.server + "/subscribe", json = channel, headers = self.auth_header)
         if not resp.ok:
             resp.raise_for_status()
+        return resp.json()
 
     def unsubscribe(self, channel_id):
         print("Unsubscribe from Channel {0} on server {1}".format(channel_id, self.server))
@@ -52,6 +53,7 @@ class Server:
         resp = self.session.post(self.server + "/unsubscribe", json = channel, headers = self.auth_header)
         if not resp.ok:
             resp.raise_for_status()
+        return resp.json()
 
     def getPlaylists(self):
         resp = self.session.get(self.server + "/user/playlists", headers = self.auth_header)
@@ -67,6 +69,7 @@ class Server:
         resp = self.session.post(self.server + "/user/playlists/create", json = playlist, headers = self.auth_header)
         if not resp.ok:
             resp.raise_for_status()
+        return resp.json()
 
     def deletePlaylist(self, playlist_id):
         print("Delete playlist {0} on server {1}".format(playlist_id, self.server))
@@ -76,6 +79,7 @@ class Server:
         resp = self.session.post(self.server + "/user/playlists/delete", json = playlist, headers = self.auth_header)
         if not resp.ok:
             resp.raise_for_status()
+        return resp.json()
 
     def renamePlaylist(self, playlist_id, new_name):
         playlist = {"playlistId" : playlist_id, "newName": new_name}
@@ -84,6 +88,7 @@ class Server:
         resp = self.session.post(self.server + "/user/playlists/rename", json = playlist, headers = self.auth_header)
         if not resp.ok:
             resp.raise_for_status()
+        return resp.json()
 
     def clearPlaylist(self, playlist_id):
         print("Clear playlist {0} on server {1}".format(playlist_id, self.server))
@@ -93,6 +98,7 @@ class Server:
         resp = self.session.post(self.server + "/user/playlists/clear", json = item, headers = self.auth_header)
         if not resp.ok:
             resp.raise_for_status()
+        return resp.json()
 
     def getPlaylistItems(self, playlist_id):
         resp = self.session.get(self.server + "/playlists/" + playlist_id, headers = self.auth_header)
@@ -108,6 +114,7 @@ class Server:
         resp = self.session.post(self.server + "/user/playlists/add", json = item, headers = self.auth_header)
         if not resp.ok:
             resp.raise_for_status()
+        return resp.json()
 
     def removePlaylistItem(self, playlist_id, index):
         print("Remove index {0} from playlist {1} on server {2}".format(index, playlist_id, self.server))
@@ -117,6 +124,7 @@ class Server:
         resp = self.session.post(self.server + "/user/playlists/remove", json = item, headers = self.auth_header)
         if not resp.ok:
             resp.raise_for_status()
+        return resp.json()
 
 class Sync:
     servers = []
@@ -178,7 +186,8 @@ class Sync:
         for serverObj in self.servers:
             if serverObj in serverFilter:
                 continue
-            serverObj.createPlaylist(name)
+            response = serverObj.createPlaylist(name)
+            playlist_id = response['playlistId']
             for i in items:
                 serverObj.addPlaylistItem(playlist_id, i);
         playlists = self.state["playlists"]
@@ -206,10 +215,8 @@ class Sync:
         for sub in self.state["subscriptions"]:
             serverObj.subscribe(sub);
         for p in self.state["playlists"]:
-            serverObj.createPlaylist(p["name"]);
-            # Get all playlists to find the id of the playlist we just created
-            playlists = serverObj.getPlaylists();
-            playlist_id = next(x["id"] for x in playlists if x["name"] == p["name"])
+            response = serverObj.createPlaylist(p["name"]);
+            playlist_id = response['playlistId']
             for i in p["items"]:
                 serverObj.addPlaylistItem(playlist_id, i);
 
