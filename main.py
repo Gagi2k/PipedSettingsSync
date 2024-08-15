@@ -307,33 +307,52 @@ class Sync:
                 servers.append(serverObj.url)
                 self.state["servers"] = servers
 
-        for action in self.state["todo"]:
-            for server in action["servers"]:
-                serverObj = self.servers[server]
-                if action["type"] == "subscribe":
-                    serverObj.subscribe(action["channel"])
-                elif action["type"] == "unsubscribe":
-                    serverObj.unsubscribe(action["channel"])
-                elif action["type"] == "deletePlaylist":
-                    playlists = serverObj.getPlaylists()
-                    for sp in playlists:
-                        if sp["name"] == action["name"]:
-                            serverObj.deletePlaylist(sp["id"])
-                elif action["type"] == "createPlaylist":
-                    for idx, p in enumerate(self.state["playlists"]):
-                        if p["name"] == action["name"]:
-                            response = serverObj.createPlaylist(action["name"])
-                            playlist_id = response['playlistId']
-                            if len(p["items"]) != 0:
-                                serverObj.addPlaylistItems(playlist_id, p["items"])
-                elif action["type"] == "updatePlaylist":
-                    for idx, p in enumerate(self.state["playlists"]):
-                        if p["name"] == action["name"]:
-                            playlists = serverObj.getPlaylists()
-                            for sp in playlists:
-                                if sp["name"] == action["name"]:
-                                    serverObj.clearPlaylist(sp["id"])
-                                    serverObj.addPlaylistItems(sp["id"], p["items"])
+        todos = self.state["todo"]
+        self.state["todo"] = []
+        while todos:
+            action = todos.pop()
+            serverList = action["servers"]
+            action["servers"] = []
+            while serverList:
+                server = serverList.pop()
+                try:
+                    serverObj = self.servers[server]
+                    if action["type"] == "subscribe":
+                        serverObj.subscribe(action["channel"])
+                    elif action["type"] == "unsubscribe":
+                        serverObj.unsubscribe(action["channel"])
+                    elif action["type"] == "deletePlaylist":
+                        playlists = serverObj.getPlaylists()
+                        for sp in playlists:
+                            if sp["name"] == action["name"]:
+                                serverObj.deletePlaylist(sp["id"])
+                    elif action["type"] == "createPlaylist":
+                        for idx, p in enumerate(self.state["playlists"]):
+                            if p["name"] == action["name"]:
+                                response = serverObj.createPlaylist(action["name"])
+                                playlist_id = response['playlistId']
+                                if len(p["items"]) != 0:
+                                    serverObj.addPlaylistItems(playlist_id, p["items"])
+                    elif action["type"] == "updatePlaylist":
+                        for idx, p in enumerate(self.state["playlists"]):
+                            if p["name"] == action["name"]:
+                                playlists = serverObj.getPlaylists()
+                                for sp in playlists:
+                                    if sp["name"] == action["name"]:
+                                        serverObj.clearPlaylist(sp["id"])
+                                        serverObj.addPlaylistItems(sp["id"], p["items"])
+                except:
+                    # save the current server back into the action
+                    newServerList = action["servers"]
+                    newServerList.append(server)
+                    action["servers"] = newServerList
+
+            # If we have some servers again in the action something didn't work
+            # and we need to save the action again as todo
+            if len(action["servers"]) > 0:
+                newTodos = self.state["todo"]
+                newTodos.append(action)
+                self.state["todo"] = newTodos
 
         if not dryRun:
             try:
