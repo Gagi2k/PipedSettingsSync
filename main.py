@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0
 
 from requests import Session
+from copy import deepcopy
 import json
 
 # Download state from all servers and store it
@@ -28,7 +29,7 @@ class Server:
         if not resp.ok:
             resp.raise_for_status()
         self.auth_token = resp.json()["token"]
-        self.auth_header = {"Authorization": self.auth_token}
+        self.auth_header = {"Authorization": self.auth_token, "Content-Type": "application/json" }
 
     def getSubscriptions(self):
         resp = self.session.get(self.server + "/subscriptions", headers = self.auth_header)
@@ -140,6 +141,7 @@ class Server:
 
 class Sync:
     servers = []
+    leftOverTodos = []
 
     def __init__(self):
         try:
@@ -150,7 +152,7 @@ class Sync:
                 self.state.setdefault("playlists", [])
                 self.state.setdefault("todo", [])
                 f.close()
-        except:
+        except FileNotFoundError:
             self.state = {
                 "subscriptions": [],
                 "servers": [],
@@ -164,6 +166,13 @@ class Sync:
         except:
             raise ValueError("Could not open config.json")
 
+        # Save all leftover todos in a extra list
+        # This is needed to ignore certain changes if there are open todos
+        self.leftOverTodos = deepcopy(self.state["todo"])
+
+        # Create a new state to store updates
+        self.newState = deepcopy(self.state)
+
         for server in self.config["servers"]:
             serverObj = Server(server["url"])
             serverObj.login(server["username"], server["password"])
@@ -173,65 +182,84 @@ class Sync:
     def addTodo(self, type, additionalKey, additionalValue, serverFilter):
         servers = [i for i, s in enumerate(self.servers) if s not in serverFilter]
         found = False
-        for index, value in enumerate(self.state["todo"]):
+        for index, value in enumerate(self.newState["todo"]):
             if value['type'] == type and value[additionalKey] == additionalValue:
                 value['servers'] = list(set(value['servers'] + servers))
                 found = True
                 break
         if not found:
-            self.state["todo"].append({ 'type': type, additionalKey: additionalValue, 'servers': servers })
+            self.newState["todo"].append({ 'type': type, additionalKey: additionalValue, 'servers': servers })
+
+    def hasLeftOverTodo(self, type, server):
+        for index, value in enumerate(self.leftOverTodos):
+            if value['type'] == type and self.servers.index(server) in value['servers']:
+                return True
+        return False
 
     def subscribe(self, serverFilter, channel_id):
-        subscriptions = self.state["subscriptions"]
+        subscriptions = self.newState["subscriptions"]
         subscriptions.append(channel_id)
-        self.state["subscriptions"] = subscriptions
+        self.newState["subscriptions"] = subscriptions
         self.addTodo("subscribe", "channel", channel_id, serverFilter)
 
     def unsubscribe(self, serverFilter, channel_id):
-        subscriptions = self.state["subscriptions"]
+        if self.hasLeftOverTodo("subscribe", serverFilter[0]):
+            print("Server state not uptodate: Ignore unsubscribe from server {0}".format(serverFilter[0].url))
+            return;
+        subscriptions = self.newState["subscriptions"]
         subscriptions.remove(channel_id)
-        self.state["subscriptions"] = subscriptions
+        self.newState["subscriptions"] = subscriptions
         self.addTodo("unsubscribe", "channel", channel_id, serverFilter)
 
     def deletePlaylist(self, serverFilter, name):
-        self.state["playlists"] = [p for p in self.state["playlists"] if not p["name"] == name]
+        if self.hasLeftOverTodo("createPlaylist", serverFilter[0]):
+            print("Server state not uptodate: Ignore deletePlaylist of {0} from server {1}".format(name, serverFilter[0].url))
+            return;
+        self.newState["playlists"] = [p for p in self.newState["playlists"] if not p["name"] == name]
         self.addTodo("deletePlaylist", "name", name, serverFilter)
 
     def createPlaylist(self, serverFilter, name, items):
-        playlists = self.state["playlists"]
+        if self.hasLeftOverTodo("deletePlaylist", serverFilter[0]):
+            print("Server state not uptodate: Ignore createPlaylist of {0} from server {1}".format(name, serverFilter[0]))
+            return;
+        playlists = self.newState["playlists"]
         playlists.append({'name': name, 'items': items})
-        self.state["playlists"] = playlists
+        self.newState["playlists"] = playlists
         self.addTodo("createPlaylist", "name", name, serverFilter)
 
     def addPlaylistItem(self, serverFilter, name, item, index):
         servers = [s.url for i, s in enumerate(self.servers) if s not in serverFilter]
         print("TODO: Add Playlist Item {0} at {1} to Playlist {2} on servers {3}".format(item, index, name, servers))
-        playlists = self.state["playlists"]
+        playlists = self.newState["playlists"]
         for idx, p in enumerate(playlists):
             if p["name"] == name:
                 new_list = p["items"]
                 new_list.insert(index, item)
                 playlists[idx] = {'name': name, 'items': new_list}
-        self.state["playlists"] = playlists
+        self.newState["playlists"] = playlists
         self.addTodo("updatePlaylist", "name", name, serverFilter)
 
     def removePlaylistItem(self, serverFilter, name, item, index):
+        if self.hasLeftOverTodo("updatePlaylist", serverFilter[0]):
+            print("Server state not uptodate: Ignore removing Playlist Item from server {0}".format(serverFilter[0].url))
+            return;
         servers = [s.url for i, s in enumerate(self.servers) if s not in serverFilter]
         print("TODO: Remove Playlist Item {0} at {1} to Playlist {2} on servers {3}".format(item, index, name, servers))
-        playlists = self.state["playlists"]
+        playlists = self.newState["playlists"]
         for idx, p in enumerate(playlists):
             if p["name"] == name:
                 new_list = p["items"]
-                new_list.remove(item)
+                if item in new_list:
+                    new_list.remove(item)
                 playlists[idx] = {'name': name, 'items': new_list}
-        self.state["playlists"] = playlists
+        self.newState["playlists"] = playlists
         self.addTodo("updatePlaylist", "name", name, serverFilter)
 
     def pushCurrentState(self, serverObj):
         print("Pushing current State to {0}".format(serverObj.url))
-        for sub in self.state["subscriptions"]:
+        for sub in self.newState["subscriptions"]:
             serverObj.subscribe(sub);
-        for p in self.state["playlists"]:
+        for p in self.newState["playlists"]:
             response = serverObj.createPlaylist(p["name"]);
             playlist_id = response['playlistId']
             serverObj.addPlaylistItems(playlist_id, p["items"])
@@ -307,11 +335,16 @@ class Sync:
                 servers.append(serverObj.url)
                 self.state["servers"] = servers
 
-        todos = self.state["todo"]
+        # Change detection done. Save the new state
+        self.state = deepcopy(self.newState)
+
+        todos = deepcopy(self.state["todo"])
         self.state["todo"] = []
+        # print("OPEN TODOS:", todos)
         while todos:
             action = todos.pop()
-            serverList = action["servers"]
+            print("Processing todo:", action)
+            serverList = deepcopy(action["servers"])
             action["servers"] = []
             while serverList:
                 server = serverList.pop()
@@ -336,12 +369,26 @@ class Sync:
                     elif action["type"] == "updatePlaylist":
                         for idx, p in enumerate(self.state["playlists"]):
                             if p["name"] == action["name"]:
+                                playlist_updated = False;
                                 playlists = serverObj.getPlaylists()
                                 for sp in playlists:
                                     if sp["name"] == action["name"]:
                                         serverObj.clearPlaylist(sp["id"])
                                         serverObj.addPlaylistItems(sp["id"], p["items"])
+                                        new_content = serverObj.getPlaylistItems(sp["id"])
+                                        if new_content != p["items"]:
+                                            print("Couldn't update playlist {0} on server {1}. Try again in next sync.".format(action["name"], serverObj.url))
+                                            raise ValueError("Server refused update")
+                                        playlist_updated = True
+                                if not playlist_updated:
+                                    print("Couldn't find playlist {0} on server {1}. Creating it now.".format(action["name"], serverObj.url))
+                                    response = serverObj.createPlaylist(action["name"])
+                                    playlist_id = response['playlistId']
+                                    serverObj.addPlaylistItems(playlist_id, p["items"])
+                    else:
+                        print("Unknown todo type:", action["type"])
                 except:
+                    print("Failed to send todo to server", self.servers[server].url)
                     # save the current server back into the action
                     newServerList = action["servers"]
                     newServerList.append(server)
