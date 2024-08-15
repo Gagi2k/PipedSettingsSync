@@ -1,3 +1,7 @@
+#!/usr/bin/env python3
+# Copyright (C) 2024 Dominik Holland
+# SPDX-License-Identifier: GPL-3.0
+
 from requests import Session
 import json
 
